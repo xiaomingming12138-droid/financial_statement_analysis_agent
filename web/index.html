@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102c46">
+  <title>研迹 · 财报研究 Agent</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="研迹首页"><span class="brand-symbol">研</span><span>研迹<small>RESEARCH AGENT</small></span></a>
+    <div class="workspace-label">个人研究空间 <span>LOCAL</span></div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="workspace"><span>▦</span> 研究工作台</button>
+      <button class="nav-item" data-view="architecture"><span>⌘</span> 项目架构</button>
+    </nav>
+    <div class="library-heading"><h2>研究资料</h2><span id="document-count">01</span></div>
+    <div id="documents" class="document-list"></div>
+    <label class="upload-button" for="upload"><span>＋</span> 导入财报<input id="upload" type="file" accept=".pdf,.txt,.md" hidden></label>
+    <p class="upload-hint">PDF / TXT / MD · 最大 5 MB<br>上传后保留在当前进程内存中</p>
+    <div class="sidebar-footer"><span class="status-dot"></span><div>本地研究环境<small>不连接交易账户</small></div><span class="version">v0.1</span></div>
+  </aside>
+
+  <div class="main-shell">
+    <header class="topbar"><div><span class="breadcrumb">研迹</span><span class="slash">/</span><span id="page-title">研究工作台</span></div><span class="topbar-badge"><span class="status-dot"></span> Evidence first</span></header>
+    <main id="workspace-view">
+      <div class="page-heading"><div><p class="eyebrow">FINANCIAL RESEARCH, WITH A TRACE.</p><h1>让每个结论，<span>都有财报依据。</span></h1><p class="subtitle">从原文检索到财务计算，把研究过程留在答案里。</p></div><span class="heading-mark" aria-hidden="true">↗</span></div>
+      <div class="workspace-grid">
+        <div class="research-column">
+          <section class="question-card" aria-labelledby="question-heading">
+            <div class="card-topline"><h2 id="question-heading"><span class="section-number">01</span> 发起研究</h2><span class="label-badge">文档内研究</span></div>
+            <form id="research-form">
+              <label class="sr-only" for="question">你的研究问题</label>
+              <textarea id="question" maxlength="1000" rows="4" placeholder="例如：分析 2024 年收入、利润与现金流，并指出需要关注的风险。" required></textarea>
+              <div class="suggestions"><span>试着问</span><button type="button" data-question="分析 2024 年收入、利润与现金流，并指出需要关注的风险。">经营质量分析 ↗</button><button type="button" data-question="应收账款增长是否值得关注？有哪些风险？">回款与风险 ↗</button><button type="button" data-question="能否根据这份财报预测明年股价？">检验证据边界 ↗</button></div>
+              <div class="form-bottom"><div class="mode-selector"><label for="mode">运行模式</label><select id="mode"><option value="demo">离线演示</option><option value="live" disabled>真实模型 · 未配置</option></select></div><button id="submit" class="primary-button" type="submit"><span>开始研究</span><span aria-hidden="true">↗</span></button></div>
+            </form>
+            <div class="mode-note" id="mode-note">离线模式：虚构财报使用固定流程；上传文档仅做检索预览，不调用大模型。</div>
+          </section>
+
+          <div id="error" class="error-banner" role="alert" hidden></div>
+          <div id="loading" class="loading-card" role="status" hidden><span class="spinner"></span><div><strong>正在研究所选文档</strong><p>完成后将展示实际工具调用、计算过程和原文引用。</p></div></div>
+
+          <section id="empty-state" class="empty-state">
+            <div class="empty-symbol" aria-hidden="true">⌕</div><p class="eyebrow">YOUR NEXT INSIGHT STARTS HERE</p><h2>好研究，经得起追问。</h2><p>选择资料，提出问题。每个计算都能展开，<br>每条引用都能回到原文。</p>
+            <div class="workflow-mini"><span><i>1</i> 检索原文</span><b>→</b><span><i>2</i> 工具计算</span><b>→</b><span><i>3</i> 带引用回答</span></div>
+          </section>
+
+          <section id="results" hidden aria-live="polite">
+            <div class="results-heading"><h2><span class="section-number">02</span> 研究结果</h2><button id="export" type="button" class="text-button">导出 Markdown ↓</button></div>
+            <div id="result-meta" class="result-meta"></div>
+            <div id="warnings"></div>
+            <div id="calculations" class="calculations-grid"></div>
+            <article class="answer-card"><div class="answer-label"><span class="status-dot"></span> 研究简报 <span id="answer-mode"></span></div><div id="answer" class="answer-content"></div></article>
+            <div class="sources-heading"><h2><span class="section-number">03</span> 原文证据</h2><span id="source-count"></span></div>
+            <div id="sources" class="sources-list"></div>
+          </section>
+        </div>
+
+        <aside class="inspector" aria-label="研究过程">
+          <section class="inspector-card"><div class="inspector-title"><h2>执行轨迹</h2><span id="trace-count">0 STEPS</span></div><p class="inspector-caption">查看实际调用，理解答案如何产生。</p><div id="trace"><div class="trace-placeholder"><span class="trace-placeholder-dot"></span><p>等待发起研究<small>工具调用记录将在这里显示</small></p></div></div></section>
+          <section class="principles-card"><span class="small-tag">RESEARCH STANDARD</span><h3>先有证据，再有结论。</h3><ul><li><span>01</span>原文保留文档与页码</li><li><span>02</span>计算校验数值、引文与单位</li><li><span>03</span>资料未披露时说明不足</li></ul><p>引用检查验证来源存在；结论是否被原文支持，仍需人工核验。</p></section>
+          <div class="demo-label"><span>◈</span><p>内置资料为虚构公司年报，<br>仅用于演示研究流程。</p></div>
+        </aside>
+      </div>
+      <footer class="page-footer">研迹 RESEARCH AGENT <span>可追溯 · 可计算 · 可验证</span></footer>
+    </main>
+
+    <main id="architecture-view" hidden>
+      <div class="page-heading"><div><p class="eyebrow">BUILT TO EXPLAIN, NOT JUST ANSWER.</p><h1>把 Agent，<span>做成可验证的系统。</span></h1><p class="subtitle">面向 AI / Agent 开发岗位的项目实践。</p></div></div>
+      <section class="architecture-card"><h2>一次研究的完整链路</h2><div class="architecture-flow"><div>文档导入<small>PDF / UTF-8 文本</small></div><span>→</span><div>检索工具<small>分页切片 + BM25</small></div><span>→</span><div>模型决策<small>最多 8 轮 / 12 次调用</small></div><span>→</span><div>计算与回答<small>Decimal + 引用校验</small></div></div><p>真实模式由模型选择检索和计算工具；工具结果返回模型形成下一轮决策。离线演示运行固定流程，可用于无密钥环境的功能检查。</p></section>
+      <div class="architecture-grid"><section class="architecture-card"><span class="small-tag">01 / AGENT ENGINEERING</span><h2>不是单次问答封装</h2><p>工具参数由 Pydantic 验证；调用轨迹包含参数、结果摘要、耗时与错误。服务对重试、调用数和总时长设置边界。</p></section><section class="architecture-card"><span class="small-tag">02 / FINANCIAL TOOLS</span><h2>让数字可复核</h2><p>计算输入必须出现在已检索的原文引文中。使用十进制运算，检查单位一致性、零分母与负数基期；公式与输入可展开查看。</p></section><section class="architecture-card"><span class="small-tag">03 / EVALUATION</span><h2>验证能力与边界</h2><p>仓库提供离线评测与自动化测试，覆盖引用、计算、证据不足、文件上传和模拟模型的工具循环。实际模型质量需接入后单独评测。</p></section><section class="architecture-card"><span class="small-tag">04 / NEXT ITERATION</span><h2>保留真实的工程边界</h2><p>当前为单用户本地 MVP；尚未实现扫描件 OCR、表格结构识别、多用户隔离或联网行情。文档重启后需重新导入。</p></section></div>
+    </main>
+  </div>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
