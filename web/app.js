@@ -92,8 +92,11 @@ function appendCitedText(parent, text, sources) {
 function renderResult(result, elapsed) {
   $("results").hidden = false;
   $("empty-state").hidden = true;
-  $("answer-mode").textContent = result.mode === "live" ? "真实模型" : "离线演示 / 非模型生成";
-  $("result-meta").textContent = `${result.mode === "live" ? "模型工具流程" : "离线流程"} · ${result.trace.length} 次工具调用 · ${result.sources.length} 段证据 · ${(elapsed / 1000).toFixed(1)} 秒`;
+  $("answer-mode").textContent = result.answer_origin === "evidence_summary"
+    ? "工具结果摘录 / 研究未完成"
+    : result.mode === "live" ? "真实模型" : "离线演示 / 非模型生成";
+  const completion = result.status === "partial" ? " · 部分结果" : "";
+  $("result-meta").textContent = `${result.mode === "live" ? "模型工具流程" : "离线流程"}${completion} · ${result.trace.length} 次工具请求 · ${result.sources.length} 段证据 · ${(elapsed / 1000).toFixed(1)} 秒`;
   $("warnings").replaceChildren(...result.warnings.map(warning => element("p", "warning-banner", warning)));
   $("calculations").replaceChildren();
   for (const calculation of result.calculations) {
@@ -201,6 +204,7 @@ $("upload").addEventListener("change", async () => {
 $("export").addEventListener("click", () => {
   if (!lastResult) return;
   const lines = ["# 研迹研究简报", "", `研究问题：${lastQuestion}`, `运行模式：${lastResult.mode === "live" ? "真实模型" : "离线演示（非模型生成）"}`, "", ...lastResult.warnings.map(w => `注意：${w}`), "", lastResult.answer, "", "## 原文证据", ""];
+  if (lastResult.status === "partial") lines.splice(5, 0, "完成状态：部分结果，研究未完整完成。", "");
   lastResult.sources.forEach(source => { lines.push(`### ${source.title} · 页 ${source.page} · ${source.id}`, "", source.text, ""); });
   lines.push("## 计算记录", "", "```json", JSON.stringify(lastResult.calculations, null, 2), "```", "", "## 校验范围", "", lastResult.checks.note);
   const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" }));

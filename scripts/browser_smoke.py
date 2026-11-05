@@ -63,9 +63,27 @@ def main() -> None:
         page.locator("#toast").wait_for(state="hidden")
         page.screenshot(path=str(output / "workspace-mobile.png"), full_page=True)
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "mobile horizontal overflow"
+        # Exercise partial-result presentation with a deterministic response fixture.
+        partial = page.request.post(args.url + "/api/research", data={"question": "分析经营质量", "document_ids": ["demo-qiheng-2024"], "mode": "demo"}).json()
+        partial.update(mode="live", status="partial", answer_origin="evidence_summary",
+                       answer="研究未完整完成，以下为工具结果摘录：收入同比 25.00%。 [demo-qiheng-2024:p1:c1]",
+                       warnings=["检测到重复工具请求，已停止循环。本次为部分结果。"])
+        for checkbox in page.locator(".document-item input").all():
+            checkbox.set_checked(False)
+        page.locator(".document-item input").first.set_checked(True)
+        page.route("**/api/research", lambda route: route.fulfill(json=partial))
+        page.get_by_role("button", name="开始研究").click()
+        page.locator("#results").wait_for(state="visible")
+        assert "部分结果" in page.locator("#result-meta").inner_text()
+        assert "工具结果摘录" in page.locator("#answer-mode").inner_text()
+        assert "已停止循环" in page.locator("#warnings").inner_text()
+        with page.expect_download() as partial_download:
+            page.get_by_role("button", name="导出 Markdown ↓").click()
+        assert "完成状态：部分结果" in Path(partial_download.value.path()).read_text(encoding="utf-8")
+        page.screenshot(path=str(output / "partial-result-mobile.png"), full_page=True)
         assert not errors, errors
         browser.close()
-    print(json.dumps({"status": "passed", "checks": ["desktop", "demo calculations", "trace", "source jump", "export", "architecture", "evidence refusal", "upload and isolation", "mobile layout", "no JavaScript errors"]}, ensure_ascii=False))
+    print(json.dumps({"status": "passed", "checks": ["desktop", "demo calculations", "trace", "source jump", "export", "architecture", "evidence refusal", "upload and isolation", "mobile layout", "partial-result fixture and export", "no JavaScript errors"]}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

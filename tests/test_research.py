@@ -140,6 +140,16 @@ class RetrievalAndDemoTests(unittest.TestCase):
         self.assertIn("未知工具", result["error"])
         self.assertEqual(context.trace[0]["status"], "error")
 
+    def test_repeated_calculation_reuses_result_without_duplicate_cards(self):
+        arguments, _ = growth_arguments()
+        context = ResearchContext([DEMO])
+        context.tool("search_documents", {"query": "营业收入", "limit": 5})
+        first = context.tool("financial_calculator", arguments)
+        second = context.tool("financial_calculator", arguments)
+        self.assertEqual(first["value"], second["value"])
+        self.assertEqual(len(context.calculations), 1)
+        self.assertTrue(context.trace[-1]["cached"])
+
 
 class LiveLoopTests(unittest.IsolatedAsyncioTestCase):
     @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
@@ -151,13 +161,16 @@ class LiveLoopTests(unittest.IsolatedAsyncioTestCase):
             requests.append(body)
             turn = len(requests)
             if turn == 1:
-                message = {"role": "assistant", "content": None, "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "search_documents", "arguments": json.dumps({"query": "营业收入", "limit": 5})}}]}
+                message = {"role": "assistant", "content": None, "reasoning_content": "provider-private-reasoning", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "search_documents", "arguments": json.dumps({"query": "营业收入", "limit": 5})}}]}
             elif turn == 2:
-                self.assertEqual(body["messages"][-1]["role"], "tool")
-                self.assertIn("sources", json.loads(body["messages"][-1]["content"]))
+                tool_result = next(message for message in reversed(body["messages"]) if message["role"] == "tool")
+                self.assertIn("sources", json.loads(tool_result["content"]))
+                assistant = next(message for message in body["messages"] if message["role"] == "assistant")
+                self.assertEqual(assistant["reasoning_content"], "provider-private-reasoning")
                 message = {"role": "assistant", "content": None, "tool_calls": [{"id": "call-2", "type": "function", "function": {"name": "financial_calculator", "arguments": json.dumps(arguments)}}]}
             else:
-                calculation = json.loads(body["messages"][-1]["content"])
+                tool_result = next(message for message in reversed(body["messages"]) if message["role"] == "tool")
+                calculation = json.loads(tool_result["content"])
                 self.assertEqual(calculation["value"], "25.00")
                 message = {"role": "assistant", "content": "营业收入同比增长 25.00%。 [demo-qiheng-2024:p1:c1]"}
             return httpx.Response(200, json={"choices": [{"message": message}]})
@@ -167,6 +180,7 @@ class LiveLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["model_turns"], 3)
         self.assertEqual(len(result["calculations"]), 1)
         self.assertTrue(result["checks"]["citation_ids_valid"])
+        self.assertNotIn("provider-private-reasoning", json.dumps(result))
 
     @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
     async def test_upstream_error_does_not_expose_response_body(self):
@@ -177,11 +191,158 @@ class LiveLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sensitive", str(raised.exception))
 
     @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
-    async def test_turn_limit_stops_repeated_search(self):
-        message = {"content": None, "tool_calls": [{"id": "repeat", "type": "function", "function": {"name": "search_documents", "arguments": '{"query":"收入"}'}}]}
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": [{"message": message}]}))) as client:
-            with self.assertRaisesRegex(ModelServiceError, "8 轮"):
-                await run_model("分析收入", [DEMO], client)
+    async def test_repeated_search_stops_and_preserves_evidence(self):
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            message = {"content": None, "tool_calls": [{"id": f"repeat-{len(requests)}", "type": "function", "function": {"name": "search_documents", "arguments": '{"query":"营业收入"}'}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析收入", [DEMO], client)
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(requests[-1]["tool_choice"], "none")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["answer_origin"], "evidence_summary")
+        self.assertEqual(len(result["trace"]), 2)
+        self.assertFalse(result["trace"][0]["cached"])
+        self.assertTrue(result["trace"][1]["cached"])
+        self.assertTrue(result["sources"])
+        self.assertIn("并非模型生成", result["answer"])
+        self.assertTrue(result["checks"]["citation_ids_valid"])
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_tool_budget_returns_summary_and_replies_to_skipped_calls(self):
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            if len(requests) == 1:
+                calls = [{"id": f"search-{i}", "type": "function", "function": {"name": "search_documents", "arguments": json.dumps({"query": f"营业收入 {i}"})}} for i in range(14)]
+                message = {"content": None, "tool_calls": calls}
+            else:
+                self.assertEqual(body["tool_choice"], "none")
+                replies = [message for message in body["messages"] if message["role"] == "tool"]
+                self.assertEqual(len(replies), 14)
+                self.assertEqual(len({message["tool_call_id"] for message in replies}), 14)
+                self.assertIn("未执行", json.loads(replies[-1]["content"])["error"])
+                message = {"content": "已找到营业收入数据；其余分析未完成。 [demo-qiheng-2024:p1:c1]"}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析经营质量", [DEMO], client)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(result["trace"]), 12)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["answer_origin"], "model")
+        self.assertTrue(result["checks"]["citation_ids_valid"])
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_last_turn_is_reserved_for_an_answer(self):
+        requests = []
+        arguments, _ = growth_arguments()
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            turn = len(requests)
+            if turn == 1:
+                name, params = "search_documents", {"query": "营业收入"}
+            elif turn <= 7:
+                name, params = "financial_calculator", {**arguments, "label": f"收入同比复核 {turn}"}
+            else:
+                self.assertEqual(body["tool_choice"], "none")
+                return httpx.Response(200, json={"choices": [{"message": {"content": "收入同比 25.00%。 [demo-qiheng-2024:p1:c1]"}}]})
+            message = {"content": None, "tool_calls": [{"id": f"call-{turn}", "type": "function", "function": {"name": name, "arguments": json.dumps(params)}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析经营质量", [DEMO], client)
+        self.assertEqual(len(requests), 8)
+        self.assertEqual(result["model_turns"], 8)
+        self.assertEqual(len(result["trace"]), 7)
+        self.assertEqual(result["status"], "partial")
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_no_progress_stops_even_when_queries_differ(self):
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            if body["tool_choice"] == "none":
+                message = {"content": "已找到营业收入原文，其余证据不足。 [demo-qiheng-2024:p1:c1]"}
+            else:
+                message = {"content": None, "tool_calls": [{"id": f"q-{len(requests)}", "type": "function", "function": {"name": "search_documents", "arguments": json.dumps({"query": f"营业收入 zz{len(requests)}", "limit": 1})}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析营业收入", [DEMO], client)
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(len(result["trace"]), 3)
+        self.assertEqual(result["status"], "partial")
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_summary_service_failure_preserves_work_without_body_leak(self):
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            if body["tool_choice"] == "none":
+                return httpx.Response(400, text="private-upstream-body")
+            message = {"content": None, "tool_calls": [{"id": f"repeat-{len(requests)}", "type": "function", "function": {"name": "search_documents", "arguments": '{"query":"营业收入"}'}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析收入", [DEMO], client)
+        self.assertEqual(result["status"], "partial")
+        self.assertTrue(result["sources"])
+        self.assertIn("400", " ".join(result["warnings"]))
+        self.assertNotIn("private-upstream-body", json.dumps(result))
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_fallback_keeps_successful_calculations_and_citations(self):
+        arguments, _ = growth_arguments()
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            turn = len(requests)
+            name, params = ("search_documents", {"query": "营业收入"}) if turn == 1 else ("financial_calculator", arguments)
+            message = {"content": None, "tool_calls": [{"id": f"call-{turn}", "type": "function", "function": {"name": name, "arguments": json.dumps(params)}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析收入增长", [DEMO], client)
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(requests[-1]["tool_choice"], "none")
+        self.assertEqual(result["answer_origin"], "evidence_summary")
+        self.assertEqual(len(result["calculations"]), 1)
+        self.assertEqual(result["calculations"][0]["value"], "25.00")
+        self.assertIn("25.00%", result["answer"])
+        self.assertTrue(result["checks"]["citation_ids_valid"])
+
+    @patch.dict(os.environ, {"LLM_API_KEY": "test-not-a-real-secret", "LLM_BASE_URL": "https://model.example/v1"})
+    async def test_failed_calculation_can_be_corrected_with_field_feedback(self):
+        arguments, _ = growth_arguments()
+        requests = []
+        def handler(request):
+            body = json.loads(request.content)
+            requests.append(body)
+            turn = len(requests)
+            if turn == 1:
+                name, params = "search_documents", {"query": "营业收入"}
+            elif turn == 2:
+                name, params = "financial_calculator", {**arguments, "numerator": {**arguments["numerator"], "value": ["private-input-data"]}}
+            elif turn == 3:
+                feedback = next(message for message in reversed(body["messages"]) if message["role"] == "tool")["content"]
+                self.assertIn("numerator.value", feedback)
+                self.assertNotIn("private-input-data", feedback)
+                name, params = "financial_calculator", arguments
+            else:
+                message = {"content": "营业收入同比 25.00%。 [demo-qiheng-2024:p1:c1]"}
+                return httpx.Response(200, json={"choices": [{"message": message}]})
+            message = {"content": None, "tool_calls": [{"id": f"c-{turn}", "type": "function", "function": {"name": name, "arguments": json.dumps(params)}}]}
+            return httpx.Response(200, json={"choices": [{"message": message}]})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await run_model("分析收入", [DEMO], client)
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(len(result["calculations"]), 1)
+        self.assertEqual(result["calculations"][0]["value"], "25.00")
+        self.assertEqual(result["status"], "completed")
 
 
 class APITests(unittest.IsolatedAsyncioTestCase):
