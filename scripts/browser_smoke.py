@@ -34,6 +34,7 @@ def main() -> None:
         assert "14.40" in page.locator("#calculations").inner_text()
         page.locator(".calculation summary").first.click()
         assert "125000" in page.locator(".calculation").first.inner_text()
+        assert "单位依据" in page.locator(".calculation").first.inner_text()
         page.locator(".citation").first.click()
         assert page.locator(".source-card.highlight").count() == 1
         with page.expect_download() as download:

@@ -10,6 +10,19 @@ from dataclasses import dataclass
 
 MAX_CHARS = 300_000
 
+# Match explicit table declarations, including spaces introduced by PDF extraction.
+# Longest denominations are matched as complete units; 元 is not a match for 万元.
+UNIT_DECLARATION = re.compile(
+    r"(?:金\s*额\s*)?单\s*位\s*[:：]?\s*[（(]?\s*"
+    r"(?:人\s*民\s*币\s*)?(亿\s*元|万\s*元|元|[%％])(?!\s*[/／])"
+    r"[ \t]*[）)]?"
+)
+
+
+def unit_declarations(text: str) -> list[tuple[str, str]]:
+    return [(re.sub(r"\s", "", match.group(1)).replace("％", "%"), match.group(0).strip())
+            for match in UNIT_DECLARATION.finditer(text)]
+
 
 @dataclass(frozen=True)
 class Source:
@@ -18,6 +31,7 @@ class Source:
     title: str
     page: int
     text: str
+    unit_context: str = ""
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()
@@ -36,11 +50,18 @@ class Document:
     def chunks(self) -> list[Source]:
         result = []
         for page_no, page in enumerate(self.pages, start=1):
+            declarations = unit_declarations(page)
+            units = {unit for unit, _ in declarations}
+            # Never borrow a declaration from a different page or resolve conflicting
+            # declarations by guessing. Keep context separate from verbatim chunks.
+            context = declarations[0][1] if len(units) == 1 else ""
+            if len(context) > 750:
+                context = ""
             # Overlap retains table headings and context without inventing PDF pages.
             for offset in range(0, len(page), 550):
                 text = page[offset:offset + 750].strip()
                 if text:
-                    result.append(Source(f"{self.id}:p{page_no}:c{offset // 550 + 1}", self.id, self.title, page_no, text))
+                    result.append(Source(f"{self.id}:p{page_no}:c{offset // 550 + 1}", self.id, self.title, page_no, text, context))
         return result
 
 

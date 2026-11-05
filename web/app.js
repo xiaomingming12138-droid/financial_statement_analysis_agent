@@ -107,6 +107,8 @@ function renderResult(result, elapsed) {
     details.append(element("summary", "", "查看计算依据"), element("p", "formula", calculation.formula));
     for (const [label, operand] of Object.entries(calculation.inputs)) {
       details.append(element("p", "input-quote", `${label === "numerator" ? "输入 A" : "输入 B"}：${operand.value} ${operand.unit}\n原文：${operand.quote}`));
+      const proof = calculation.unit_evidence?.[label];
+      if (proof) details.append(element("p", "input-quote", `单位依据${proof.scope === "same_page" ? "（同页说明）" : ""}：${proof.quote}`));
     }
     card.append(element("p", "calculation-label", calculation.label), value, details);
     $("calculations").append(card);
@@ -127,6 +129,7 @@ function renderResult(result, elapsed) {
     const heading = element("div", "source-heading");
     heading.append(element("strong", "", `[${index + 1}] ${source.title}`), element("span", "", /\.txt$|\.md$/i.test(source.title) ? "文本段" : `第 ${source.page} 页`));
     card.append(heading, element("p", "source-text", source.text), element("code", "source-id", source.id));
+    if (source.unit_context) card.append(element("p", "input-quote", `同页单位说明（原文）：${source.unit_context}`));
     $("sources").append(card);
   });
   $("trace-count").textContent = `${result.trace.length} STEPS`;
